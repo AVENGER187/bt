@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+sqlalchemy
+dotenv
+resend
+pydantic[email]
+argon2-cffi
+asyncpg
+psycopg2-binary
+alembic
+python-jose
