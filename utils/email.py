@@ -13,7 +13,7 @@ def generate_otp(length: int = 6) -> str:
 def send_otp_email(email: str, otp: str):
     try:
         msg = MIMEMultipart("alternative")
-        msg["From"] = f"Auth <{SMTP_EMAIL}>"
+        msg["From"] = f"Filmo SignUp Verification <{SMTP_EMAIL}>"
         msg["To"] = email
         msg["Subject"] = "Your OTP"
 
