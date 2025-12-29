@@ -87,6 +87,7 @@ If you didn’t request this, ignore this email.
 </body>
 </html>
 """
+        
         msg.attach(MIMEText(text, "plain"))
         msg.attach(MIMEText(html, "html"))
 
