@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
-from database.initialization import get_db, UserModel, OTPVerificationModel
+from database.initialization import get_db, UserModel, OTPVerificationModel, RefreshTokenModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from utils.email import send_otp
 from utils.auth import hash_password, create_tokens, verify_password
 from datetime import datetime, timezone, timedelta
 from schemas.auth import SendOTPRequest, VerifyOTPRequest, LoginRequest
+from utils.auth import hash_refresh_token
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -147,6 +148,48 @@ async def login_route(
     tokens = await create_tokens(user.id, db)
     
     return {
+        "message": "Login successful",
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens["refresh_token"],
+        "token_type": tokens["token_type"]
+    }
+
+@router.post("/refresh", status_code=status.HTTP_200_OK)
+async def refresh_tokens_route(
+    refresh_token: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Refresh access and refresh tokens using a valid refresh token.
+    Invalidates the old refresh token and issues new tokens.
+    """
+    # Hash the provided refresh token
+    token_hash = hash_refresh_token(refresh_token)
+    
+    # Find valid refresh token in database
+    result = await db.execute(
+        select(RefreshTokenModel).where(
+            RefreshTokenModel.token_hash == token_hash,
+            RefreshTokenModel.is_revoked == False,
+            RefreshTokenModel.expires_at > datetime.now(timezone.utc)
+        )
+    )
+    db_token = result.scalar_one_or_none()
+    
+    if not db_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token"
+        )
+    
+    # Revoke old refresh token
+    db_token.is_revoked = True
+    
+    # Generate new tokens
+    tokens = await create_tokens(db_token.user_id, db)
+    
+    return {
+        "message": "Tokens refreshed successfully",
         "access_token": tokens["access_token"],
         "refresh_token": tokens["refresh_token"],
         "token_type": tokens["token_type"]
