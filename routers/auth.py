@@ -5,7 +5,7 @@ from sqlalchemy import select
 from utils.email import send_otp
 from utils.auth import hash_password, create_tokens, verify_password
 from datetime import datetime, timezone, timedelta
-from schemas.auth import SendOTPRequest, VerifyOTPRequest, LoginRequest
+from schemas.auth import SendOTPRequest, VerifyOTPRequest, LoginRequest, ForgotPasswordRequest, ResetPasswordRequest
 from utils.auth import hash_refresh_token
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -195,4 +195,128 @@ async def refresh_tokens_route(
         "token_type": tokens["token_type"]
     }
 
+
+@router.post("/reset-password/send-otp", status_code=status.HTTP_200_OK)
+async def forgot_password_route(
+    request: ForgotPasswordRequest,
+    bg: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Send OTP to email for password reset.
+    """
+    email = request.email.lower().strip()
+    
+    # Check if user exists
+    result = await db.execute(select(UserModel).where(UserModel.email == email))
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        # Don't reveal if email exists or not (security best practice)
+        return {"message": "If the email exists, an OTP has been sent", "email": email}
+    
+    # Check for pending OTP
+    result = await db.execute(
+        select(OTPVerificationModel).where(
+            OTPVerificationModel.email == email,
+            OTPVerificationModel.is_used == False,
+            OTPVerificationModel.expires_at > datetime.now(timezone.utc)
+        )
+    )
+    if result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="OTP already sent. Please wait before requesting a new one."
+        )
+    
+    # Generate and send OTP
+    otp = send_otp(bg, email)
+    
+    # Store OTP (no password stored yet)
+    otp_verification = OTPVerificationModel(
+        email=email,
+        otp_code=otp,
+        hashed_password=None,  # Password will be set during reset
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5)
+    )
+    
+    db.add(otp_verification)
+    await db.commit()
+    
+    return {"message": "OTP sent to your email", "email": email}
+
+
+@router.post("/reset-password/{email}", status_code=status.HTTP_200_OK)
+async def reset_password_route(
+    email: str,
+    request: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Verify OTP and reset password.
+    Revokes all existing refresh tokens for security.
+    """
+    email = email.lower().strip()
+    
+    # Find valid OTP
+    result = await db.execute(
+        select(OTPVerificationModel).where(
+            OTPVerificationModel.email == email,
+            OTPVerificationModel.otp_code == request.otp,
+            OTPVerificationModel.is_used == False,
+            OTPVerificationModel.expires_at > datetime.now(timezone.utc)
+        )
+    )
+    otp_record = result.scalar_one_or_none()
+    
+    if not otp_record:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired OTP"
+        )
+    
+    # Find user
+    result = await db.execute(select(UserModel).where(UserModel.email == email))
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Mark OTP as used
+    otp_record.is_used = True
+    
+    # Update user password
+    user.hashed_password = hash_password(request.new_password)
+    
+    # Revoke all existing refresh tokens for this user (security measure)
+    await db.execute(
+        select(RefreshTokenModel).where(
+            RefreshTokenModel.user_id == user.id,
+            RefreshTokenModel.is_revoked == False
+        )
+    )
+    result = await db.execute(
+        select(RefreshTokenModel).where(
+            RefreshTokenModel.user_id == user.id,
+            RefreshTokenModel.is_revoked == False
+        )
+    )
+    tokens_to_revoke = result.scalars().all()
+    for token in tokens_to_revoke:
+        token.is_revoked = True
+    
+    await db.commit()
+    
+    # Generate new tokens
+    tokens = await create_tokens(user.id, db)
+    
+    return {
+        "message": "Password reset successfully",
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens["refresh_token"],
+        "token_type": tokens["token_type"]
+    }
 
