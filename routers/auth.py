@@ -5,7 +5,7 @@ from sqlalchemy import select
 from utils.email import send_otp
 from utils.auth import hash_password, create_tokens, verify_password
 from datetime import datetime, timezone, timedelta
-from schemas.auth import SendOTPRequest, VerifyOTPRequest, LoginRequest, ForgotPasswordRequest, ResetPasswordRequest
+from schemas.auth import SendOTPRequest, VerifyOTPRequest, LoginRequest, ForgotPasswordRequest, ResetPasswordRequest, RefreshTokenRequest
 from utils.auth import hash_refresh_token
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -156,7 +156,7 @@ async def login_route(
 
 @router.post("/refresh", status_code=status.HTTP_200_OK)
 async def refresh_tokens_route(
-    refresh_token: str,
+    request: RefreshTokenRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -164,7 +164,7 @@ async def refresh_tokens_route(
     Invalidates the old refresh token and issues new tokens.
     """
     # Hash the provided refresh token
-    token_hash = hash_refresh_token(refresh_token)
+    token_hash = hash_refresh_token(request.refresh_token)
     
     # Find valid refresh token in database
     result = await db.execute(
@@ -290,20 +290,14 @@ async def reset_password_route(
     
     # Update user password
     user.hashed_password = hash_password(request.new_password)
-    
-    # Revoke all existing refresh tokens for this user (security measure)
-    await db.execute(
-        select(RefreshTokenModel).where(
-            RefreshTokenModel.user_id == user.id,
-            RefreshTokenModel.is_revoked == False
-        )
-    )
+
     result = await db.execute(
         select(RefreshTokenModel).where(
             RefreshTokenModel.user_id == user.id,
             RefreshTokenModel.is_revoked == False
         )
     )
+
     tokens_to_revoke = result.scalars().all()
     for token in tokens_to_revoke:
         token.is_revoked = True
