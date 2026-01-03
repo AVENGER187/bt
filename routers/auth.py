@@ -5,10 +5,14 @@ from sqlalchemy import select
 from utils.email import send_otp
 from utils.auth import hash_password, create_tokens, verify_password
 from datetime import datetime, timezone, timedelta
-from schemas.auth import SendOTPRequest, VerifyOTPRequest, LoginRequest, ForgotPasswordRequest, ResetPasswordRequest, RefreshTokenRequest
 from utils.auth import hash_refresh_token
+from pydantic import BaseModel, EmailStr, Field
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+class SendOTPRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
 
 @router.post("/signup/send-otp", status_code=status.HTTP_200_OK)
 async def send_otp_route(
@@ -63,6 +67,8 @@ async def send_otp_route(
     
     return {"message": "OTP sent to your email", "email": email}
 
+class VerifyOTPRequest(BaseModel):
+    otp: str = Field(..., min_length=6, max_length=6)
 
 @router.post("/signup/verify-otp/{email}", status_code=status.HTTP_201_CREATED)
 async def verify_otp_route(
@@ -116,6 +122,10 @@ async def verify_otp_route(
         "token_type": tokens["token_type"]
     }
 
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+
 @router.post("/login", status_code=status.HTTP_200_OK)
 async def login_route(
     request: LoginRequest,
@@ -153,6 +163,10 @@ async def login_route(
         "refresh_token": tokens["refresh_token"],
         "token_type": tokens["token_type"]
     }
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
 
 @router.post("/refresh", status_code=status.HTTP_200_OK)
 async def refresh_tokens_route(
@@ -195,6 +209,8 @@ async def refresh_tokens_route(
         "token_type": tokens["token_type"]
     }
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
 
 @router.post("/reset-password/send-otp", status_code=status.HTTP_200_OK)
 async def forgot_password_route(
@@ -245,6 +261,9 @@ async def forgot_password_route(
     
     return {"message": "OTP sent to your email", "email": email}
 
+class ResetPasswordRequest(BaseModel):
+    otp: str = Field(..., min_length=6, max_length=6)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 @router.post("/reset-password/{email}", status_code=status.HTTP_200_OK)
 async def reset_password_route(
