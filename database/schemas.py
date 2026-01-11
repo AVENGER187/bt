@@ -1,10 +1,14 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Boolean,text, Integer
+from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Boolean, text, Integer
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.sql import func
+from datetime import datetime, timezone
 import asyncio
 from database.initialization import Base, engine
 from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, ForeignKey, Text, Enum as SQLEnum, Table, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func, text
 from sqlalchemy.orm import relationship
+from datetime import datetime, timezone
 from enum import Enum
 
 # Enums
@@ -45,15 +49,6 @@ class MemberRoleEnum(str, Enum):
     PARENT = "parent"
     CHILD = "child"
 
-# Association Tables
-user_skills = Table(
-    'user_skills',
-    Base.metadata,
-    Column('user_id', UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
-    Column('skill_id', Integer, ForeignKey('skills.id', ondelete='CASCADE'), primary_key=True),
-    Column('created_at', DateTime(timezone=True), server_default=func.now())
-)
-
 # Models
 class UserModel(Base):
     __tablename__ = "users"
@@ -73,6 +68,29 @@ class UserModel(Base):
     project_memberships = relationship("ProjectMemberModel", back_populates="user", cascade="all, delete-orphan")
     sent_messages = relationship("MessageModel", back_populates="sender")
 
+# Association Tables - MOVED HERE AFTER UserModel
+# Association table (FIXED)
+user_skills = Table(
+    "user_skills",
+    Base.metadata,
+    Column(
+        "user_profile_id",
+        UUID(as_uuid=True),
+        ForeignKey("user_profiles.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "skill_id",
+        Integer,
+        ForeignKey("skills.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        server_default=func.now(),
+    ),
+)
 
 class UserProfileModel(Base):
     __tablename__ = "user_profiles"
@@ -107,7 +125,6 @@ class UserProfileModel(Base):
     
     __table_args__ = (
         Index('idx_user_profile_location', 'latitude', 'longitude'),
-        Index('idx_application_unique', 'role_id', 'applicant_id', unique=True)
     )
 
 
@@ -160,6 +177,7 @@ class ProjectModel(Base):
         Index('idx_project_location', 'latitude', 'longitude'),
     )
 
+
 class ProjectRoleModel(Base):
     __tablename__ = "project_roles"
     
@@ -205,6 +223,7 @@ class ApplicationModel(Base):
     
     __table_args__ = (
         Index('idx_application_lookup', 'project_id', 'applicant_id'),
+        Index('idx_application_unique', 'role_id', 'applicant_id', unique=True),
     )
 
 
@@ -272,6 +291,8 @@ class RefreshTokenModel(Base):
     is_revoked = Column(Boolean, default=False, nullable=False)
     
     user = relationship("UserModel", back_populates="refresh_tokens")
+
+
 async def create_tables():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
