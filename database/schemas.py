@@ -53,9 +53,18 @@ class MemberRoleEnum(str, Enum):
 user_skills = Table(
     'user_skills',
     Base.metadata,
-    Column('user_id', UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
-    Column('skill_id', Integer, ForeignKey('skills.id', ondelete='CASCADE'), primary_key=True),
-    Column('created_at', DateTime(timezone=True), server_default=func.now())
+    Column(
+        'user_profile_id',                  # ✅ CHANGE NAME
+        UUID(as_uuid=True),
+        ForeignKey('user_profiles.id', ondelete='CASCADE'),  # ✅ CHANGE FK
+        primary_key=True
+    ),
+    Column(
+        'skill_id',
+        Integer,
+        ForeignKey('skills.id', ondelete='CASCADE'),
+        primary_key=True
+    ),
 )
 
 # Models
