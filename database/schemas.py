@@ -1,14 +1,10 @@
 from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Boolean,text, Integer
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.sql import func
-from datetime import datetime, timezone
 import asyncio
 from database.initialization import Base, engine
 from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, ForeignKey, Text, Enum as SQLEnum, Table, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func, text
 from sqlalchemy.orm import relationship
-from datetime import datetime, timezone
 from enum import Enum
 
 # Enums
@@ -53,18 +49,9 @@ class MemberRoleEnum(str, Enum):
 user_skills = Table(
     'user_skills',
     Base.metadata,
-    Column(
-        'user_profile_id',                  # ✅ CHANGE NAME
-        UUID(as_uuid=True),
-        ForeignKey('user_profiles.id', ondelete='CASCADE'),  # ✅ CHANGE FK
-        primary_key=True
-    ),
-    Column(
-        'skill_id',
-        Integer,
-        ForeignKey('skills.id', ondelete='CASCADE'),
-        primary_key=True
-    ),
+    Column('user_id', UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
+    Column('skill_id', Integer, ForeignKey('skills.id', ondelete='CASCADE'), primary_key=True),
+    Column('created_at', DateTime(timezone=True), server_default=func.now())
 )
 
 # Models
@@ -120,6 +107,7 @@ class UserProfileModel(Base):
     
     __table_args__ = (
         Index('idx_user_profile_location', 'latitude', 'longitude'),
+        Index('idx_application_unique', 'role_id', 'applicant_id', unique=True)
     )
 
 
@@ -172,7 +160,6 @@ class ProjectModel(Base):
         Index('idx_project_location', 'latitude', 'longitude'),
     )
 
-
 class ProjectRoleModel(Base):
     __tablename__ = "project_roles"
     
@@ -218,7 +205,6 @@ class ApplicationModel(Base):
     
     __table_args__ = (
         Index('idx_application_lookup', 'project_id', 'applicant_id'),
-        Index('idx_application_unique', 'role_id', 'applicant_id', unique=True),
     )
 
 
