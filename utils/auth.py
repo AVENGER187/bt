@@ -19,7 +19,8 @@ from uuid import UUID  # Add this
 
 # App config & models
 from config import ACCESS_TOKEN_EXPIRE_HOURS, SECRET_KEY, ALGORITHM, REFRESH_TOKEN_EXPIRE_DAYS
-from database.initialization import get_db, UserModel, RefreshTokenModel
+from database.initialization import get_db
+from database.schemas import UserModel, RefreshTokenModel
 
 ph = PasswordHasher()
 security = HTTPBearer()

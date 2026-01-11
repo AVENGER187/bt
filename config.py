@@ -14,3 +14,6 @@ SECRET_KEY = "your-secret-key-here"  # Use a strong secret key
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 1
 REFRESH_TOKEN_EXPIRE_DAYS = 30
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")

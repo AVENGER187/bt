@@ -9,3 +9,5 @@ asyncpg
 psycopg2-binary
 alembic
 python-jose
+httpx
+python-multipart

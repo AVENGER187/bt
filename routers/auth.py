@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
-from database.initialization import get_db, UserModel, OTPVerificationModel, RefreshTokenModel
+from database.initialization import get_db
+from database.schemas import UserModel, RefreshTokenModel, OTPVerificationModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from utils.email import send_otp
@@ -14,7 +15,11 @@ class SendOTPRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
 
-@router.post("/signup/send-otp", status_code=status.HTTP_200_OK)
+class SendOTPResponse(BaseModel):
+    message: str
+    email: EmailStr
+
+@router.post("/signup/send-otp", status_code=status.HTTP_200_OK,response_model=SendOTPResponse)
 async def send_otp_route(
     request: SendOTPRequest,
     bg: BackgroundTasks,
@@ -65,12 +70,18 @@ async def send_otp_route(
     db.add(otp_verification)
     await db.commit()
     
-    return {"message": "OTP sent to your email", "email": email}
+    return SendOTPResponse(message="OTP sent to your email",email=email)
 
 class VerifyOTPRequest(BaseModel):
     otp: str = Field(..., min_length=6, max_length=6)
 
-@router.post("/signup/verify-otp/{email}", status_code=status.HTTP_201_CREATED)
+class VerifyOTPResponse(BaseModel):
+    message: str
+    access_token: str
+    refresh_token: str
+    token_type: str
+
+@router.post("/signup/verify-otp/{email}", status_code=status.HTTP_201_CREATED, response_model=VerifyOTPResponse)
 async def verify_otp_route(
     email: str,
     request: VerifyOTPRequest,
@@ -115,18 +126,18 @@ async def verify_otp_route(
     # Generate tokens for the new user
     tokens = await create_tokens(new_user.id, db)
     
-    return {
-        "message": "Account created successfully",
-        "access_token": tokens["access_token"],
-        "refresh_token": tokens["refresh_token"],
-        "token_type": tokens["token_type"]
-    }
+    message = "Account created successfully"
+    access_token = tokens["access_token"]
+    refresh_token = tokens["refresh_token"]
+    token_type = tokens["token_type"]
+
+    return VerifyOTPResponse(message=message,access_token=access_token,refresh_token=refresh_token,token_type=token_type)
 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
 
-@router.post("/login", status_code=status.HTTP_200_OK)
+@router.post("/login", status_code=status.HTTP_200_OK, response_model=VerifyOTPResponse)
 async def login_route(
     request: LoginRequest,
     db: AsyncSession = Depends(get_db)
@@ -157,18 +168,17 @@ async def login_route(
     # Generate tokens
     tokens = await create_tokens(user.id, db)
     
-    return {
-        "message": "Login successful",
-        "access_token": tokens["access_token"],
-        "refresh_token": tokens["refresh_token"],
-        "token_type": tokens["token_type"]
-    }
+    message = "Login Successful"
+    access_token = tokens["access_token"]
+    refresh_token = tokens["refresh_token"]
+    token_type = tokens["token_type"]
 
+    return VerifyOTPResponse(message=message,access_token=access_token,refresh_token=refresh_token,token_type=token_type)
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
-@router.post("/refresh", status_code=status.HTTP_200_OK)
+@router.post("/refresh", status_code=status.HTTP_200_OK,response_model=VerifyOTPResponse)
 async def refresh_tokens_route(
     request: RefreshTokenRequest,
     db: AsyncSession = Depends(get_db)
@@ -201,18 +211,18 @@ async def refresh_tokens_route(
     
     # Generate new tokens
     tokens = await create_tokens(db_token.user_id, db)
-    
-    return {
-        "message": "Tokens refreshed successfully",
-        "access_token": tokens["access_token"],
-        "refresh_token": tokens["refresh_token"],
-        "token_type": tokens["token_type"]
-    }
+
+    message = "Tokens Refreshed Successfully"
+    access_token = tokens["access_token"]
+    refresh_token = tokens["refresh_token"]
+    token_type = tokens["token_type"]
+
+    return VerifyOTPResponse(message=message,access_token=access_token,refresh_token=refresh_token,token_type=token_type)
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
-@router.post("/reset-password/send-otp", status_code=status.HTTP_200_OK)
+@router.post("/reset-password/send-otp", status_code=status.HTTP_200_OK, response_model=SendOTPResponse)
 async def forgot_password_route(
     request: ForgotPasswordRequest,
     bg: BackgroundTasks,
@@ -259,13 +269,15 @@ async def forgot_password_route(
     db.add(otp_verification)
     await db.commit()
     
-    return {"message": "OTP sent to your email", "email": email}
+    message = "OTP sent to your email" 
+
+    return SendOTPResponse(message=message,email=email)
 
 class ResetPasswordRequest(BaseModel):
     otp: str = Field(..., min_length=6, max_length=6)
     new_password: str = Field(..., min_length=8, max_length=128)
 
-@router.post("/reset-password/{email}", status_code=status.HTTP_200_OK)
+@router.post("/reset-password/{email}", status_code=status.HTTP_200_OK, response_model=VerifyOTPResponse)
 async def reset_password_route(
     email: str,
     request: ResetPasswordRequest,
@@ -326,10 +338,11 @@ async def reset_password_route(
     # Generate new tokens
     tokens = await create_tokens(user.id, db)
     
-    return {
-        "message": "Password reset successfully",
-        "access_token": tokens["access_token"],
-        "refresh_token": tokens["refresh_token"],
-        "token_type": tokens["token_type"]
-    }
+    message = "Password Reset Successfully"
+    access_token = tokens["access_token"]
+    refresh_token = tokens["refresh_token"]
+    token_type = tokens["token_type"]
+
+    return VerifyOTPResponse(message=message,access_token=access_token,refresh_token=refresh_token,token_type=token_type)
+
 
