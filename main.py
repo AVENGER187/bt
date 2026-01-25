@@ -11,6 +11,14 @@ from routers.upload import router as uploadrouter
 
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(authrouter)
 app.include_router(profilerouter)
 app.include_router(projectrouter)
