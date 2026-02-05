@@ -68,6 +68,7 @@ async def apply_to_role(
     result = await db.execute(
         select(ProjectModel).where(ProjectModel.id == role.project_id)
     )
+    
     project = result.scalar_one_or_none()
     if project.creator_id == current_user.id:
         raise HTTPException(400, "Cannot apply to your own project")

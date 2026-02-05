@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from database.initialization import get_db
 from database.schemas import UserProfileModel, SkillModel, user_skills
 from utils.auth import get_current_user
@@ -77,6 +78,16 @@ async def create_profile(
     if result.scalar_one_or_none():
         raise HTTPException(400, "Profile already exists")
     
+    # Validate skills exist (single query instead of one per skill)
+    if request.skill_ids:
+        result = await db.execute(
+            select(SkillModel.id).where(SkillModel.id.in_(request.skill_ids))
+        )
+        valid_skill_ids = {skill_id for skill_id in result.scalars().all()}
+        invalid_skills = set(request.skill_ids) - valid_skill_ids
+        if invalid_skills:
+            raise HTTPException(400, f"Invalid skill IDs: {invalid_skills}")
+    
     # Create profile
     profile = UserProfileModel(
         user_id=current_user.id,
@@ -98,23 +109,26 @@ async def create_profile(
     )
     
     db.add(profile)
-    await db.flush()
+    await db.flush()  # Generate profile.id
     
-    # Add skills
+    # Bulk insert skills (single query instead of loop)
     if request.skill_ids:
-        for skill_id in request.skill_ids:
-            await db.execute(
-                user_skills.insert().values(user_id=current_user.id, skill_id=skill_id)
-            )
+        await db.execute(
+            user_skills.insert(),
+            [{"user_profile_id": profile.id, "skill_id": skill_id} for skill_id in request.skill_ids]
+        )
     
     await db.commit()
     await db.refresh(profile)
     
-    # Get skills
-    result = await db.execute(
-        select(SkillModel).join(user_skills).where(user_skills.c.user_id == current_user.id)
-    )
-    skills = [{"id": s.id, "name": s.name, "category": s.category} for s in result.scalars().all()]
+    # Get skills with all data in one query (already fetched above, reuse)
+    if request.skill_ids:
+        result = await db.execute(
+            select(SkillModel).where(SkillModel.id.in_(request.skill_ids))
+        )
+        skills = [{"id": s.id, "name": s.name, "category": s.category} for s in result.scalars().all()]
+    else:
+        skills = []
     
     return ProfileResponse(
         id=str(profile.id),
@@ -137,25 +151,23 @@ async def create_profile(
         skills=skills,
         created_at=profile.created_at.isoformat()
     )
-
 @router.get("/me", response_model=ProfileResponse)
 async def get_my_profile(
     current_user = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     result = await db.execute(
-        select(UserProfileModel).where(UserProfileModel.user_id == current_user.id)
+        select(UserProfileModel)
+        .options(selectinload(UserProfileModel.skills))
+        .where(UserProfileModel.user_id == current_user.id)
     )
     profile = result.scalar_one_or_none()
     
     if not profile:
         raise HTTPException(404, "Profile not found")
     
-    # Get skills
-    result = await db.execute(
-        select(SkillModel).join(user_skills).where(user_skills.c.user_id == current_user.id)
-    )
-    skills = [{"id": s.id, "name": s.name, "category": s.category} for s in result.scalars().all()]
+    # Use the relationship - no extra query needed
+    skills = [{"id": s.id, "name": s.name, "category": s.category} for s in profile.skills]
     
     return ProfileResponse(
         id=str(profile.id),
@@ -178,7 +190,6 @@ async def get_my_profile(
         skills=skills,
         created_at=profile.created_at.isoformat()
     )
-
 @router.put("/update", response_model=ProfileResponse)
 async def update_profile(
     request: CreateProfileRequest,
@@ -192,6 +203,16 @@ async def update_profile(
     
     if not profile:
         raise HTTPException(404, "Profile not found")
+    
+    # Validate skills exist (if provided)
+    if request.skill_ids:
+        result = await db.execute(
+            select(SkillModel.id).where(SkillModel.id.in_(request.skill_ids))
+        )
+        valid_skill_ids = {skill_id for skill_id in result.scalars().all()}
+        invalid_skills = set(request.skill_ids) - valid_skill_ids
+        if invalid_skills:
+            raise HTTPException(400, f"Invalid skill IDs: {invalid_skills}")
     
     # Update fields
     profile.name = request.name
@@ -210,22 +231,29 @@ async def update_profile(
     profile.previous_projects = request.previous_projects
     profile.portfolio_url = request.portfolio_url
     
-    # Update skills
-    await db.execute(user_skills.delete().where(user_skills.c.user_id == current_user.id))
+    # Update skills - FIXED: use user_profile_id and profile.id
+    await db.execute(
+        user_skills.delete().where(user_skills.c.user_profile_id == profile.id)
+    )
+    
+    # Bulk insert skills
     if request.skill_ids:
-        for skill_id in request.skill_ids:
-            await db.execute(
-                user_skills.insert().values(user_id=current_user.id, skill_id=skill_id)
-            )
+        await db.execute(
+            user_skills.insert(),
+            [{"user_profile_id": profile.id, "skill_id": skill_id} for skill_id in request.skill_ids]
+        )
     
     await db.commit()
     await db.refresh(profile)
     
-    # Get skills
-    result = await db.execute(
-        select(SkillModel).join(user_skills).where(user_skills.c.user_id == current_user.id)
-    )
-    skills = [{"id": s.id, "name": s.name, "category": s.category} for s in result.scalars().all()]
+    # Get skills - optimized fetch
+    if request.skill_ids:
+        result = await db.execute(
+            select(SkillModel).where(SkillModel.id.in_(request.skill_ids))
+        )
+        skills = [{"id": s.id, "name": s.name, "category": s.category} for s in result.scalars().all()]
+    else:
+        skills = []
     
     return ProfileResponse(
         id=str(profile.id),

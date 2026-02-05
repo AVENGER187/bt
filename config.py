@@ -13,7 +13,7 @@ SECRET_KEY = "your-secret-key-here"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 1
 REFRESH_TOKEN_EXPIRE_DAYS = 30
-FRONTEND_LINK = "http://localhost:5173"
+FRONTEND_LINK = "http://localhost:3000"
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
