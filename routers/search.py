@@ -4,7 +4,7 @@ from sqlalchemy import select, and_, or_, func
 from database.initialization import get_db
 from database.schemas import (
     ProjectModel, ProjectRoleModel, UserProfileModel, SkillModel,
-    ProjectStatusEnum, user_skills
+    ProjectStatusEnum, user_skills, ProjectTypeEnum
 )
 from pydantic import BaseModel, Field
 from math import radians, cos, sin, asin, sqrt

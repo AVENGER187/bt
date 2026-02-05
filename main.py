@@ -10,6 +10,10 @@ from routers.chat import router as chatrouter
 from routers.skills import router as skillrouter
 from routers.upload import router as uploadrouter
 from config import FRONTEND_LINK
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
+from utils.scheduler import start_scheduler, stop_scheduler
+
 app = FastAPI(title="Filmo API")
 
 app.add_middleware(
@@ -41,3 +45,13 @@ app.include_router(uploadrouter)
 @app.get("/")
 def root():
     return {"message": "Filmo API"}
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    start_scheduler()
+    yield
+    # Shutdown
+    stop_scheduler()
+
+app = FastAPI(lifespan=lifespan)

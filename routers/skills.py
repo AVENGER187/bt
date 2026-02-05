@@ -1,16 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from database.initialization import get_db
 from database.schemas import SkillModel
 from utils.auth import get_current_user
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/skills", tags=["Skills"])
 
 class CreateSkillRequest(BaseModel):
-    name: str
-    category: str | None = None
+    name: str = Field(..., min_length=1, max_length=255)
+    category: str | None = Field(None, max_length=255)
 
 class SkillResponse(BaseModel):
     id: int
@@ -26,16 +26,16 @@ async def create_skill(
 ):
     """Create a new skill. Any authenticated user can add skills."""
     
-    # Check if skill already exists
+    # Check if skill already exists (case-insensitive)
     result = await db.execute(
-        select(SkillModel).where(SkillModel.name == request.name)
+        select(SkillModel).where(func.lower(SkillModel.name) == request.name.lower())
     )
     if result.scalar_one_or_none():
         raise HTTPException(400, "Skill already exists")
     
     skill = SkillModel(
-        name=request.name,
-        category=request.category
+        name=request.name.strip(),
+        category=request.category.strip() if request.category else None
     )
     
     db.add(skill)
@@ -51,15 +51,19 @@ async def create_skill(
 
 @router.get("/list", response_model=list[SkillResponse])
 async def list_skills(
-    category: str | None = None,
+    category: str | None = Query(None),
+    search: str | None = Query(None, description="Search skills by name"),
     db: AsyncSession = Depends(get_db)
 ):
-    """List all skills, optionally filtered by category."""
+    """List all skills, optionally filtered by category or search term."""
     
     query = select(SkillModel)
     
     if category:
         query = query.where(SkillModel.category == category)
+    
+    if search:
+        query = query.where(SkillModel.name.ilike(f"%{search}%"))
     
     result = await db.execute(query.order_by(SkillModel.name))
     skills = result.scalars().all()
@@ -73,6 +77,20 @@ async def list_skills(
         )
         for skill in skills
     ]
+
+@router.get("/categories", response_model=list[str])
+async def list_categories(db: AsyncSession = Depends(get_db)):
+    """Get all unique skill categories."""
+    
+    result = await db.execute(
+        select(SkillModel.category)
+        .distinct()
+        .where(SkillModel.category.isnot(None))
+        .order_by(SkillModel.category)
+    )
+    categories = result.scalars().all()
+    
+    return categories
 
 @router.get("/{skill_id}", response_model=SkillResponse)
 async def get_skill(

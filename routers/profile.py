@@ -5,7 +5,6 @@ from sqlalchemy.orm import selectinload
 from database.initialization import get_db
 from database.schemas import UserProfileModel, SkillModel, user_skills
 from utils.auth import get_current_user
-from utils.validators import CreateProfileRequest
 from pydantic import BaseModel
 from database.schemas import GenderEnum
 from pydantic import BaseModel, Field, model_validator
