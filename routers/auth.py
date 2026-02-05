@@ -2,12 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from database.initialization import get_db
 from database.schemas import UserModel, RefreshTokenModel, OTPVerificationModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 from utils.email import send_otp
-from utils.auth import hash_password, create_tokens, verify_password
+from utils.auth import hash_password, create_tokens, verify_password, hash_refresh_token
 from datetime import datetime, timezone, timedelta
-from utils.auth import hash_refresh_token
 from pydantic import BaseModel, EmailStr, Field
+import secrets
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -19,7 +19,7 @@ class SendOTPResponse(BaseModel):
     message: str
     email: EmailStr
 
-@router.post("/signup/send-otp", status_code=status.HTTP_200_OK,response_model=SendOTPResponse)
+@router.post("/signup/send-otp", status_code=status.HTTP_200_OK, response_model=SendOTPResponse)
 async def send_otp_route(
     request: SendOTPRequest,
     bg: BackgroundTasks,
@@ -39,6 +39,13 @@ async def send_otp_route(
             detail="Email already registered"
         )
     
+    # OPTIMIZATION: Delete expired OTPs first, then check for valid ones
+    await db.execute(
+        update(OTPVerificationModel)
+        .where(OTPVerificationModel.expires_at <= datetime.now(timezone.utc))
+        .values(is_used=True)
+    )
+    
     # Check for pending OTP
     result = await db.execute(
         select(OTPVerificationModel).where(
@@ -47,10 +54,14 @@ async def send_otp_route(
             OTPVerificationModel.expires_at > datetime.now(timezone.utc)
         )
     )
-    if result.scalar_one_or_none():
+    existing_otp = result.scalar_one_or_none()
+    
+    if existing_otp:
+        # Calculate remaining time
+        remaining_seconds = (existing_otp.expires_at - datetime.now(timezone.utc)).total_seconds()
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="OTP already sent. Please wait before requesting a new one."
+            detail=f"OTP already sent. Please wait {int(remaining_seconds)} seconds before requesting a new one."
         )
     
     # Hash password using auth utility
@@ -70,10 +81,10 @@ async def send_otp_route(
     db.add(otp_verification)
     await db.commit()
     
-    return SendOTPResponse(message="OTP sent to your email",email=email)
+    return SendOTPResponse(message="OTP sent to your email", email=email)
 
 class VerifyOTPRequest(BaseModel):
-    otp: str = Field(..., min_length=6, max_length=6)
+    otp: str = Field(..., min_length=6, max_length=6, pattern=r'^\d{6}$')
 
 class VerifyOTPResponse(BaseModel):
     message: str
@@ -110,13 +121,22 @@ async def verify_otp_route(
             detail="Invalid or expired OTP"
         )
     
+    # Double-check user doesn't exist (race condition protection)
+    result = await db.execute(select(UserModel).where(UserModel.email == email))
+    if result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
+    
     # Mark OTP as used
     otp_record.is_used = True
     
     # Create user with stored hashed password
     new_user = UserModel(
         email=email,
-        hashed_password=otp_record.hashed_password
+        hashed_password=otp_record.hashed_password,
+        is_verified=True  # Mark as verified since they verified OTP
     )
     
     db.add(new_user)
@@ -126,12 +146,12 @@ async def verify_otp_route(
     # Generate tokens for the new user
     tokens = await create_tokens(new_user.id, db)
     
-    message = "Account created successfully"
-    access_token = tokens["access_token"]
-    refresh_token = tokens["refresh_token"]
-    token_type = tokens["token_type"]
-
-    return VerifyOTPResponse(message=message,access_token=access_token,refresh_token=refresh_token,token_type=token_type)
+    return VerifyOTPResponse(
+        message="Account created successfully",
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        token_type=tokens["token_type"]
+    )
 
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -155,7 +175,14 @@ async def login_route(
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="email does not exist"
+            detail="Invalid email or password"  # Don't reveal which field is wrong
+        )
+    
+    # Check if account is active
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated"
         )
     
     # Verify password
@@ -168,17 +195,17 @@ async def login_route(
     # Generate tokens
     tokens = await create_tokens(user.id, db)
     
-    message = "Login Successful"
-    access_token = tokens["access_token"]
-    refresh_token = tokens["refresh_token"]
-    token_type = tokens["token_type"]
-
-    return VerifyOTPResponse(message=message,access_token=access_token,refresh_token=refresh_token,token_type=token_type)
+    return VerifyOTPResponse(
+        message="Login successful",
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        token_type=tokens["token_type"]
+    )
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
-@router.post("/refresh", status_code=status.HTTP_200_OK,response_model=VerifyOTPResponse)
+@router.post("/refresh", status_code=status.HTTP_200_OK, response_model=VerifyOTPResponse)
 async def refresh_tokens_route(
     request: RefreshTokenRequest,
     db: AsyncSession = Depends(get_db)
@@ -190,20 +217,31 @@ async def refresh_tokens_route(
     # Hash the provided refresh token
     token_hash = hash_refresh_token(request.refresh_token)
     
-    # Find valid refresh token in database
+    # OPTIMIZATION: Get token and user in one query
     result = await db.execute(
-        select(RefreshTokenModel).where(
+        select(RefreshTokenModel, UserModel)
+        .join(UserModel, RefreshTokenModel.user_id == UserModel.id)
+        .where(
             RefreshTokenModel.token_hash == token_hash,
             RefreshTokenModel.is_revoked == False,
             RefreshTokenModel.expires_at > datetime.now(timezone.utc)
         )
     )
-    db_token = result.scalar_one_or_none()
+    row = result.one_or_none()
     
-    if not db_token:
+    if not row:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token"
+        )
+    
+    db_token, user = row
+    
+    # Check if user is active
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated"
         )
     
     # Revoke old refresh token
@@ -212,12 +250,12 @@ async def refresh_tokens_route(
     # Generate new tokens
     tokens = await create_tokens(db_token.user_id, db)
 
-    message = "Tokens Refreshed Successfully"
-    access_token = tokens["access_token"]
-    refresh_token = tokens["refresh_token"]
-    token_type = tokens["token_type"]
-
-    return VerifyOTPResponse(message=message,access_token=access_token,refresh_token=refresh_token,token_type=token_type)
+    return VerifyOTPResponse(
+        message="Tokens refreshed successfully",
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        token_type=tokens["token_type"]
+    )
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
@@ -239,7 +277,17 @@ async def forgot_password_route(
     
     if not user:
         # Don't reveal if email exists or not (security best practice)
-        return {"message": "If the email exists, an OTP has been sent", "email": email}
+        return SendOTPResponse(
+            message="If the email exists, an OTP has been sent",
+            email=email
+        )
+    
+    # OPTIMIZATION: Clean up expired OTPs
+    await db.execute(
+        update(OTPVerificationModel)
+        .where(OTPVerificationModel.expires_at <= datetime.now(timezone.utc))
+        .values(is_used=True)
+    )
     
     # Check for pending OTP
     result = await db.execute(
@@ -249,10 +297,13 @@ async def forgot_password_route(
             OTPVerificationModel.expires_at > datetime.now(timezone.utc)
         )
     )
-    if result.scalar_one_or_none():
+    existing_otp = result.scalar_one_or_none()
+    
+    if existing_otp:
+        remaining_seconds = (existing_otp.expires_at - datetime.now(timezone.utc)).total_seconds()
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="OTP already sent. Please wait before requesting a new one."
+            detail=f"OTP already sent. Please wait {int(remaining_seconds)} seconds before requesting a new one."
         )
     
     # Generate and send OTP
@@ -268,13 +319,11 @@ async def forgot_password_route(
     
     db.add(otp_verification)
     await db.commit()
-    
-    message = "OTP sent to your email" 
 
-    return SendOTPResponse(message=message,email=email)
+    return SendOTPResponse(message="OTP sent to your email", email=email)
 
 class ResetPasswordRequest(BaseModel):
-    otp: str = Field(..., min_length=6, max_length=6)
+    otp: str = Field(..., min_length=6, max_length=6, pattern=r'^\d{6}$')
     new_password: str = Field(..., min_length=8, max_length=128)
 
 @router.post("/reset-password/{email}", status_code=status.HTTP_200_OK, response_model=VerifyOTPResponse)
@@ -289,32 +338,26 @@ async def reset_password_route(
     """
     email = email.lower().strip()
     
-    # Find valid OTP
+    # OPTIMIZATION: Get OTP and user in one query
     result = await db.execute(
-        select(OTPVerificationModel).where(
+        select(OTPVerificationModel, UserModel)
+        .join(UserModel, OTPVerificationModel.email == UserModel.email)
+        .where(
             OTPVerificationModel.email == email,
             OTPVerificationModel.otp_code == request.otp,
             OTPVerificationModel.is_used == False,
             OTPVerificationModel.expires_at > datetime.now(timezone.utc)
         )
     )
-    otp_record = result.scalar_one_or_none()
+    row = result.one_or_none()
     
-    if not otp_record:
+    if not row:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired OTP"
         )
     
-    # Find user
-    result = await db.execute(select(UserModel).where(UserModel.email == email))
-    user = result.scalar_one_or_none()
-    
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
+    otp_record, user = row
     
     # Mark OTP as used
     otp_record.is_used = True
@@ -322,27 +365,45 @@ async def reset_password_route(
     # Update user password
     user.hashed_password = hash_password(request.new_password)
 
-    result = await db.execute(
-        select(RefreshTokenModel).where(
+    # OPTIMIZATION: Revoke all refresh tokens in single query
+    await db.execute(
+        update(RefreshTokenModel)
+        .where(
             RefreshTokenModel.user_id == user.id,
             RefreshTokenModel.is_revoked == False
         )
+        .values(is_revoked=True)
     )
-
-    tokens_to_revoke = result.scalars().all()
-    for token in tokens_to_revoke:
-        token.is_revoked = True
     
     await db.commit()
     
     # Generate new tokens
     tokens = await create_tokens(user.id, db)
     
-    message = "Password Reset Successfully"
-    access_token = tokens["access_token"]
-    refresh_token = tokens["refresh_token"]
-    token_type = tokens["token_type"]
+    return VerifyOTPResponse(
+        message="Password reset successfully",
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        token_type=tokens["token_type"]
+    )
 
-    return VerifyOTPResponse(message=message,access_token=access_token,refresh_token=refresh_token,token_type=token_type)
-
-
+@router.post("/logout")
+async def logout_route(
+    request: RefreshTokenRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Logout by revoking the refresh token.
+    """
+    token_hash = hash_refresh_token(request.refresh_token)
+    
+    # Revoke the refresh token
+    await db.execute(
+        update(RefreshTokenModel)
+        .where(RefreshTokenModel.token_hash == token_hash)
+        .values(is_revoked=True)
+    )
+    
+    await db.commit()
+    
+    return {"message": "Logged out successfully"}

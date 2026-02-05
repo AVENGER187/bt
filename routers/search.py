@@ -6,7 +6,7 @@ from database.schemas import (
     ProjectModel, ProjectRoleModel, UserProfileModel, SkillModel,
     ProjectStatusEnum, user_skills
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from math import radians, cos, sin, asin, sqrt
 
 router = APIRouter(prefix="/search", tags=["Search"])
@@ -44,44 +44,93 @@ class UserSearchResult(BaseModel):
     profile_photo_url: str | None
     skills: list[dict]
 
+class PaginationParams(BaseModel):
+    page: int = Field(default=1, ge=1)
+    limit: int = Field(default=20, ge=1, le=100)
+
 @router.get("/projects", response_model=list[ProjectSearchResult])
 async def search_projects(
     skill_id: int | None = Query(None),
     project_type: str | None = Query(None),
+    city: str | None = Query(None),
+    query: str | None = Query(None, description="Search in name/description"),
     latitude: float | None = Query(None),
     longitude: float | None = Query(None),
     max_distance_km: float | None = Query(None),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db)
 ):
-    """Search for projects. Filter by skill, type, and location."""
+    """Search for projects. Filter by skill, type, location, and text query."""
     
     # Base query - only show ACTIVE projects that aren't fully staffed
-    query = select(ProjectModel).where(
+    stmt = select(ProjectModel).where(
         and_(
             ProjectModel.status == ProjectStatusEnum.ACTIVE,
             ProjectModel.is_fully_staffed == False
         )
     )
     
-    result = await db.execute(query)
+    # Text search filter
+    if query:
+        stmt = stmt.where(
+            or_(
+                ProjectModel.name.ilike(f"%{query}%"),
+                ProjectModel.description.ilike(f"%{query}%")
+            )
+        )
+    
+    # City filter (exact match, case-insensitive)
+    if city:
+        stmt = stmt.where(ProjectModel.city.ilike(city))
+    
+    # Project type filter
+    if project_type:
+        try:
+            stmt = stmt.where(ProjectModel.project_type == ProjectTypeEnum(project_type))
+        except ValueError:
+            # Invalid project type, return empty
+            return []
+    
+    # If filtering by skill, join with roles
+    if skill_id:
+        stmt = stmt.join(ProjectRoleModel).where(
+            and_(
+                ProjectRoleModel.skill_id == skill_id,
+                ProjectRoleModel.is_filled == False
+            )
+        ).distinct()
+    
+    result = await db.execute(stmt)
     projects = result.scalars().all()
     
+    # OPTIMIZATION: Fetch all roles in one query instead of N queries
+    project_ids = [p.id for p in projects]
+    if project_ids:
+        roles_result = await db.execute(
+            select(ProjectRoleModel)
+            .where(
+                and_(
+                    ProjectRoleModel.project_id.in_(project_ids),
+                    ProjectRoleModel.is_filled == False
+                )
+            )
+        )
+        all_roles = roles_result.scalars().all()
+        
+        # Group roles by project_id
+        roles_by_project = {}
+        for role in all_roles:
+            if role.project_id not in roles_by_project:
+                roles_by_project[role.project_id] = []
+            roles_by_project[role.project_id].append(role)
+    else:
+        roles_by_project = {}
+    
+    # Build results with distance calculation
     results = []
     for project in projects:
-        # Get roles
-        result = await db.execute(
-            select(ProjectRoleModel).where(ProjectRoleModel.project_id == project.id)
-        )
-        roles = result.scalars().all()
-        
-        # Filter by skill if specified
-        if skill_id:
-            if not any(r.skill_id == skill_id and not r.is_filled for r in roles):
-                continue
-        
-        # Filter by project type
-        if project_type and project.project_type.value != project_type:
-            continue
+        roles = roles_by_project.get(project.id, [])
         
         # Calculate distance
         distance = None
@@ -99,7 +148,7 @@ async def search_projects(
             "is_filled": r.is_filled,
             "payment_type": r.payment_type.value,
             "payment_amount": r.payment_amount
-        } for r in roles if not r.is_filled]
+        } for r in roles]
         
         results.append(ProjectSearchResult(
             id=str(project.id),
@@ -117,45 +166,75 @@ async def search_projects(
     if latitude and longitude:
         results.sort(key=lambda x: x.distance_km if x.distance_km else float('inf'))
     
-    return results
+    # Pagination
+    offset = (page - 1) * limit
+    return results[offset:offset + limit]
+
 
 @router.get("/users", response_model=list[UserSearchResult])
 async def search_users(
     name: str | None = Query(None),
     profession: str | None = Query(None),
     skill_id: int | None = Query(None),
+    city: str | None = Query(None),
+    is_actor: bool | None = Query(None),
     latitude: float | None = Query(None),
     longitude: float | None = Query(None),
     max_distance_km: float | None = Query(None),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db)
 ):
     """Search for users. Filter by name, profession, skill, and location."""
     
-    query = select(UserProfileModel)
+    stmt = select(UserProfileModel)
     
     # Filter by name (partial match)
     if name:
-        query = query.where(UserProfileModel.name.ilike(f"%{name}%"))
+        stmt = stmt.where(UserProfileModel.name.ilike(f"%{name}%"))
     
     # Filter by profession (partial match)
     if profession:
-        query = query.where(UserProfileModel.profession.ilike(f"%{profession}%"))
+        stmt = stmt.where(UserProfileModel.profession.ilike(f"%{profession}%"))
     
-    result = await db.execute(query)
+    # Filter by city
+    if city:
+        stmt = stmt.where(UserProfileModel.city.ilike(city))
+    
+    # Filter by actor status
+    if is_actor is not None:
+        stmt = stmt.where(UserProfileModel.is_actor == is_actor)
+    
+    # If filtering by skill, join with user_skills
+    if skill_id:
+        stmt = stmt.join(user_skills).where(user_skills.c.skill_id == skill_id).distinct()
+    
+    result = await db.execute(stmt)
     profiles = result.scalars().all()
     
+    # OPTIMIZATION: Fetch all skills in one query instead of N queries
+    profile_ids = [p.id for p in profiles]
+    if profile_ids:
+        skills_result = await db.execute(
+            select(SkillModel, user_skills.c.user_profile_id)
+            .join(user_skills)
+            .where(user_skills.c.user_profile_id.in_(profile_ids))
+        )
+        all_skills = skills_result.all()
+        
+        # Group skills by user_profile_id
+        skills_by_profile = {}
+        for skill, profile_id in all_skills:
+            if profile_id not in skills_by_profile:
+                skills_by_profile[profile_id] = []
+            skills_by_profile[profile_id].append(skill)
+    else:
+        skills_by_profile = {}
+    
+    # Build results with distance calculation
     results = []
     for profile in profiles:
-        # Get skills
-        result = await db.execute(
-            select(SkillModel).join(user_skills).where(user_skills.c.user_id == profile.user_id)
-        )
-        skills = result.scalars().all()
-        
-        # Filter by skill if specified
-        if skill_id:
-            if not any(s.id == skill_id for s in skills):
-                continue
+        skills = skills_by_profile.get(profile.id, [])
         
         # Calculate distance
         distance = None
@@ -183,4 +262,6 @@ async def search_users(
     if latitude and longitude:
         results.sort(key=lambda x: x.distance_km if x.distance_km else float('inf'))
     
-    return results
+    # Pagination
+    offset = (page - 1) * limit
+    return results[offset:offset + limit]

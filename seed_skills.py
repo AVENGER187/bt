@@ -64,3 +64,56 @@ async def seed_skills():
 
 if __name__ == "__main__":
     asyncio.run(seed_skills())
+
+'''
+**Quick reference of your skill IDs:**
+```
+Audio:
+1  - Audio Engineering
+2  - Sound Design
+3  - Music Composition
+4  - Foley Artist
+
+Video:
+5  - Cinematography
+6  - Camera Operator
+7  - Video Editing
+8  - Color Grading
+9  - Drone Operator
+
+Lighting:
+10 - Lighting Technician
+11 - Gaffer
+12 - Best Boy Electric
+
+Production:
+13 - Director
+14 - Producer
+15 - Assistant Director
+16 - Production Manager
+17 - Script Supervisor
+
+Art:
+18 - Production Designer
+19 - Art Director
+20 - Set Designer
+21 - Props Master
+22 - Costume Designer
+24 - Makeup Artist
+
+Post-Production:
+25 - Editor
+26 - VFX Artist
+27 - Motion Graphics
+28 - Compositor
+
+Acting:
+29 - Actor
+30 - Voice Actor
+31 - Stunt Performer
+
+Other:
+32 - Screenwriter
+33 - Location Scout
+34 - Casting Director
+'''
