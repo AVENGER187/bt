@@ -1,3 +1,4 @@
+# scheduler.py
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from database.initialization import AsyncSessionLocal
@@ -20,10 +21,10 @@ async def scheduled_cleanup():
 
 def start_scheduler():
     """Start the background scheduler"""
-    # Run cleanup every day at 2 AM
+    # Run cleanup every day at 2 AM UTC
     scheduler.add_job(
         scheduled_cleanup,
-        trigger=CronTrigger(hour=2, minute=0),
+        trigger=CronTrigger(hour=2, minute=0),  # Better syntax
         id='daily_cleanup',
         replace_existing=True,
         name='Daily cleanup tasks'
@@ -35,5 +36,7 @@ def start_scheduler():
 def stop_scheduler():
     """Stop the scheduler gracefully"""
     if scheduler.running:
-        scheduler.shutdown(wait=True)
+        scheduler.shutdown(wait=True)  # Wait for running jobs to finish
         logger.info("Cleanup scheduler stopped")
+    else:
+        logger.info("Scheduler was not running")
