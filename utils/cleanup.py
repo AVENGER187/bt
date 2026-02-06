@@ -99,7 +99,7 @@ async def cleanup_expired_otps(db: AsyncSession) -> int:
 async def cleanup_revoked_refresh_tokens(db: AsyncSession) -> int:
     """
     Delete old revoked refresh tokens (keep for 30 days for audit).
-    
+
     Returns:
         Number of tokens deleted
     """

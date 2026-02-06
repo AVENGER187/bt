@@ -51,6 +51,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.get("/")
+async def root():
+    return {"message": "Filmo API is running", "version": "1.0.0"}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
 # Include routers
 app.include_router(authrouter)
 app.include_router(profilerouter)
@@ -61,11 +70,3 @@ app.include_router(managementrouter)
 app.include_router(chatrouter)
 app.include_router(skillrouter)
 app.include_router(uploadrouter)
-
-@app.get("/")
-async def root():
-    return {"message": "Filmo API is running", "version": "1.0.0"}
-
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
