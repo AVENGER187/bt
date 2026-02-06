@@ -292,6 +292,17 @@ class RefreshTokenModel(Base):
     
     user = relationship("UserModel", back_populates="refresh_tokens")
 
+class DirectMessageModel(Base):
+    __tablename__ = "direct_messages"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    sender_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    receiver_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    content = Column(Text, nullable=False)
+    sent_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    read_at = Column(DateTime(timezone=True))
+    is_deleted = Column(Boolean, default=False, nullable=False)
+
 
 async def create_tables():
     async with engine.begin() as conn:

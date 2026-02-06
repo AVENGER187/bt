@@ -61,12 +61,13 @@ async def health_check():
     return {"status": "healthy"}
 
 # Include routers
-app.include_router(authrouter)
-app.include_router(profilerouter)
-app.include_router(projectrouter)
-app.include_router(searchrouter)
-app.include_router(applicationrouter)
-app.include_router(managementrouter)
-app.include_router(chatrouter)
-app.include_router(skillrouter)
-app.include_router(uploadrouter)
+PREFIX1=""
+app.include_router(prefix=PREFIX1,router=authrouter)
+app.include_router(prefix=PREFIX1,router=profilerouter)
+app.include_router(prefix=PREFIX1,router=projectrouter)
+app.include_router(prefix=PREFIX1,router=searchrouter)
+app.include_router(prefix=PREFIX1,router=applicationrouter)
+app.include_router(prefix=PREFIX1,router=managementrouter)
+app.include_router(prefix=PREFIX1,router=chatrouter)
+app.include_router(prefix=PREFIX1,router=skillrouter)
+app.include_router(prefix=PREFIX1,router=uploadrouter)
