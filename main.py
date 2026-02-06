@@ -7,7 +7,8 @@ from routers.projects import router as projectrouter
 from routers.search import router as searchrouter
 from routers.application import router as applicationrouter
 from routers.management import router as managementrouter
-from routers.chat import router as chatrouter
+from routers.direct_messages import router as directmessagerouter
+from routers.project_chat import router as projectmessagerouter
 from routers.skills import router as skillrouter
 from routers.upload import router as uploadrouter
 from config import FRONTEND_LINK
@@ -61,13 +62,19 @@ async def health_check():
     return {"status": "healthy"}
 
 # Include routers
-PREFIX1=""
-app.include_router(prefix=PREFIX1,router=authrouter)
-app.include_router(prefix=PREFIX1,router=profilerouter)
-app.include_router(prefix=PREFIX1,router=projectrouter)
-app.include_router(prefix=PREFIX1,router=searchrouter)
-app.include_router(prefix=PREFIX1,router=applicationrouter)
-app.include_router(prefix=PREFIX1,router=managementrouter)
-app.include_router(prefix=PREFIX1,router=chatrouter)
-app.include_router(prefix=PREFIX1,router=skillrouter)
-app.include_router(prefix=PREFIX1,router=uploadrouter)
+
+PREFIX="/api/v1"
+
+routerlist = [authrouter,
+              profilerouter,
+              projectrouter,
+              searchrouter,
+              applicationrouter,
+              managementrouter,
+              projectmessagerouter,
+              directmessagerouter,
+              skillrouter,
+              uploadrouter]
+
+for router in routerlist:
+    app.include_router(prefix=PREFIX, router=router)

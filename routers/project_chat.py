@@ -4,20 +4,17 @@ from sqlalchemy import select, and_
 from database.initialization import get_db, AsyncSessionLocal
 from database.schemas import MessageModel, ProjectMemberModel, UserProfileModel
 from utils.auth import get_current_user
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from uuid import UUID
-from datetime import datetime, timezone
-from jose import jwt, JWTError
-from config import SECRET_KEY, ALGORITHM
 import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/chat", tags=["Chat"])
+router = APIRouter(prefix="/projects", tags=["Project Chat"])
 
 # Store active connections per project
-class ConnectionManager:
+class ProjectConnectionManager:
     def __init__(self):
         self.active_connections: dict[str, list[tuple[WebSocket, UUID]]] = {}  # Store (websocket, user_id)
     
@@ -56,47 +53,8 @@ class ConnectionManager:
         if project_id in self.active_connections:
             return [user_id for _, user_id in self.active_connections[project_id]]
         return []
-    
 
-manager = ConnectionManager()
-    
-# Add DM connection manager alongside your existing ConnectionManager
-class DMConnectionManager:
-    def __init__(self):
-        self.active_connections: dict[str, list[WebSocket]] = {}
-    
-    async def connect(self, user_id: str, websocket: WebSocket):
-        if user_id not in self.active_connections:
-            self.active_connections[user_id] = []
-        self.active_connections[user_id].append(websocket)
-        logger.info(f"User {user_id} connected to DM")
-    
-    def disconnect(self, user_id: str, websocket: WebSocket):
-        if user_id in self.active_connections:
-            self.active_connections[user_id] = [
-                ws for ws in self.active_connections[user_id] if ws != websocket
-            ]
-            if not self.active_connections[user_id]:
-                del self.active_connections[user_id]
-    
-    async def send_to_user(self, user_id: str, message: dict):
-        if user_id in self.active_connections:
-            disconnected = []
-            for websocket in self.active_connections[user_id]:
-                try:
-                    await websocket.send_json(message)
-                except Exception as e:
-                    logger.error(f"Error sending DM to {user_id}: {e}")
-                    disconnected.append(websocket)
-            
-            for ws in disconnected:
-                self.disconnect(user_id, ws)
-    
-    def is_online(self, user_id: str) -> bool:
-        return user_id in self.active_connections
-
-# Initialize DM manager
-dm_manager = DMConnectionManager()
+manager = ProjectConnectionManager()
 
 class MessageResponse(BaseModel):
     id: str
@@ -108,12 +66,12 @@ class MessageResponse(BaseModel):
     edited_at: str | None
     is_deleted: bool
 
-@router.websocket("/ws/{project_id}")
-async def websocket_endpoint(
+@router.websocket("/{project_id}/chat/ws")
+async def project_chat_websocket(
     websocket: WebSocket,
     project_id: UUID,
 ):
-    """WebSocket endpoint for real-time chat. Send token in first message."""
+    """WebSocket endpoint for real-time project chat. Send token in first message."""
     
     await websocket.accept()
     connected = False
@@ -134,6 +92,9 @@ async def websocket_endpoint(
             return
         
         # Verify token and get user
+        from jose import jwt, JWTError
+        from config import SECRET_KEY, ALGORITHM
+        
         try:
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
             user_id = UUID(payload["sub"])
@@ -261,137 +222,8 @@ async def websocket_endpoint(
             })
 
 
-# Initialize DM manager
-dm_manager = DMConnectionManager()
-
-# Add new WebSocket endpoint for DMs
-@router.websocket("/ws/dm")
-async def dm_websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for direct messages between users"""
-    
-    await websocket.accept()
-    connected = False
-    user_id = None
-    sender_name = "Unknown"
-    
-    try:
-        # Auth
-        auth_data = await asyncio.wait_for(websocket.receive_json(), timeout=10.0)
-        token = auth_data.get("token")
-        
-        if not token:
-            await websocket.send_json({"error": "Token required"})
-            await websocket.close()
-            return
-        
-        # Verify token
-        try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            user_id = UUID(payload["sub"])
-        except (JWTError, ValueError, KeyError) as e:
-            logger.warning(f"Invalid token in DM WebSocket: {e}")
-            await websocket.send_json({"error": "Invalid token"})
-            await websocket.close()
-            return
-        
-        # Get user profile
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(UserProfileModel).where(UserProfileModel.user_id == user_id)
-            )
-            profile = result.scalar_one_or_none()
-            sender_name = profile.name if profile else "Unknown"
-        
-        # Connect to DM system
-        await dm_manager.connect(str(user_id), websocket)
-        connected = True
-        
-        await websocket.send_json({
-            "type": "connected",
-            "user_id": str(user_id)
-        })
-        
-        # Message loop
-        while True:
-            try:
-                data = await asyncio.wait_for(websocket.receive_json(), timeout=60.0)
-                
-                # Ping/pong
-                if data.get("type") == "ping":
-                    await websocket.send_json({"type": "pong"})
-                    continue
-                
-                # Typing indicator
-                if data.get("type") == "typing":
-                    receiver_id = data.get("receiver_id")
-                    if receiver_id:
-                        await dm_manager.send_to_user(receiver_id, {
-                            "type": "typing",
-                            "sender_id": str(user_id),
-                            "sender_name": sender_name,
-                            "is_typing": data.get("is_typing", True)
-                        })
-                    continue
-                
-                # Direct message
-                receiver_id = data.get("receiver_id")
-                content = data.get("content")
-                
-                if not receiver_id or not content:
-                    continue
-                
-                if len(content) > 5000:
-                    await websocket.send_json({"error": "Message too long"})
-                    continue
-                
-                # Save to database
-                async with AsyncSessionLocal() as db:
-                    # You'll need to create DirectMessageModel in schemas.py
-                    # For now, just send real-time
-                    pass
-                
-                # Send to receiver
-                await dm_manager.send_to_user(receiver_id, {
-                    "type": "message",
-                    "sender_id": str(user_id),
-                    "sender_name": sender_name,
-                    "content": content,
-                    "sent_at": datetime.now(timezone.utc).isoformat()
-                })
-                
-                # Confirm to sender
-                await websocket.send_json({
-                    "type": "sent",
-                    "receiver_id": receiver_id
-                })
-            
-            except asyncio.TimeoutError:
-                await websocket.send_json({"type": "ping"})
-    
-    except asyncio.TimeoutError:
-        logger.warning(f"DM WebSocket timeout for user {user_id}")
-    except WebSocketDisconnect:
-        logger.info(f"DM WebSocket disconnected for user {user_id}")
-    except Exception as e:
-        logger.error(f"DM WebSocket error: {e}", exc_info=True)
-    finally:
-        if connected:
-            dm_manager.disconnect(str(user_id), websocket)
-
-# Add REST endpoint to check if user is online
-@router.get("/dm/online/{user_id}")
-async def check_user_online(
-    user_id: UUID,
-    current_user = Depends(get_current_user)
-):
-    """Check if a user is online for DM"""
-    return {
-        "user_id": str(user_id),
-        "is_online": dm_manager.is_online(str(user_id))
-    }
-
-@router.get("/messages/{project_id}", response_model=list[MessageResponse])
-async def get_messages(
+@router.get("/{project_id}/chat/messages", response_model=list[MessageResponse])
+async def get_project_messages(
     project_id: UUID,
     limit: int = Query(default=50, ge=1, le=200),
     before_id: UUID | None = None,  # For pagination
@@ -450,8 +282,10 @@ async def get_messages(
     
     return response
 
-@router.delete("/message/{message_id}")
-async def delete_message(
+
+@router.delete("/{project_id}/chat/messages/{message_id}")
+async def delete_project_message(
+    project_id: UUID,
     message_id: UUID,
     current_user = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
@@ -459,7 +293,12 @@ async def delete_message(
     """Delete a message. Only sender can delete."""
     
     result = await db.execute(
-        select(MessageModel).where(MessageModel.id == message_id)
+        select(MessageModel).where(
+            and_(
+                MessageModel.id == message_id,
+                MessageModel.project_id == project_id
+            )
+        )
     )
     message = result.scalar_one_or_none()
     
@@ -484,8 +323,9 @@ async def delete_message(
     
     return {"message": "Message deleted"}
 
-@router.get("/online-users/{project_id}")
-async def get_online_users(
+
+@router.get("/{project_id}/chat/online-users")
+async def get_project_online_users(
     project_id: UUID,
     current_user = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
