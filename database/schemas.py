@@ -1,14 +1,12 @@
 from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Boolean, text, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
-from datetime import datetime, timezone
 import asyncio
 from database.initialization import Base, engine
 from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, ForeignKey, Text, Enum as SQLEnum, Table, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func, text
 from sqlalchemy.orm import relationship
-from datetime import datetime, timezone
 from enum import Enum
 
 # Enums

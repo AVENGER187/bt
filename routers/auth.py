@@ -7,8 +7,6 @@ from utils.email import send_otp
 from utils.auth import hash_password, create_tokens, verify_password, hash_refresh_token
 from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel, EmailStr, Field
-import secrets
-
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 class SendOTPRequest(BaseModel):

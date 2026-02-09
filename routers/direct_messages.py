@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_, desc
+from sqlalchemy import select, and_, or_
 from database.initialization import get_db, AsyncSessionLocal
 from database.schemas import DirectMessageModel, UserProfileModel
 from utils.auth import get_current_user
